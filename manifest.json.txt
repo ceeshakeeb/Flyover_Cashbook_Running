@@ -1,9 +1,0 @@
-{
-  "name": "Fiberplane",
-  "short_name": "Fiberplane",
-  "start_url": "/",
-  "display": "standalone",
-  "background_color": "#185FA5",
-  "theme_color": "#185FA5",
-  "icons": []
-}
