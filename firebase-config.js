@@ -1,7 +1,7 @@
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-app.js";
 import { getAuth, GoogleAuthProvider, signInWithPopup, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js";
-import { getDatabase, ref, set, get } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-database.js";
+import { getDatabase, ref, set, get, onValue, off, update } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-database.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyB3Yb3bpHVOts7vlojTznpa-_pslaSbOKU",
@@ -26,3 +26,6 @@ window.onAuthStateChangedFirebase = onAuthStateChanged;
 window.dbRef = ref;
 window.dbSet = set;
 window.dbGet = get;
+window.dbOnValue = onValue;
+window.dbOff = off;
+window.dbUpdate = update;
