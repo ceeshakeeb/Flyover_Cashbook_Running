@@ -747,17 +747,33 @@ async function joinBook(){
   
   let found=null;let foundOwnerId=null;let foundOwnerKey=null;
   
-  // Search Firebase expenseData index node (fast lookup)
+  // Search Firebase bookIndex (fast lookup)
   if(window.db){
     try{
       const idxSnap=await window.dbGet(window.dbRef(window.db,'bookIndex/'+id));
       if(idxSnap.exists()){
         const ownerId=idxSnap.val().ownerId;
-        const ownerSnap=await window.dbGet(window.dbRef(window.db,'expenseData/'+ownerId));
-        if(ownerSnap.exists()){
-          const d=ownerSnap.val();
-          const b=(d.books||[]).find(b=>b.id===id);
-          if(b){found=b;foundOwnerId=ownerId;}
+        foundOwnerId=ownerId;
+        // Try expenseData first
+        try{
+          const ownerSnap=await window.dbGet(window.dbRef(window.db,'expenseData/'+ownerId));
+          if(ownerSnap.exists()){
+            const d=ownerSnap.val();
+            const b=(d.books||[]).find(b=>b.id===id);
+            if(b){found=b;}
+          }
+        }catch(e2){}
+        // Fallback: read from sharedBooks path (covers Firebase-auth owners)
+        if(!found){
+          try{
+            const sbSnap=await window.dbGet(window.dbRef(window.db,'sharedBooks/'+id));
+            if(sbSnap.exists()){
+              const sbData=sbSnap.val();
+              if(sbData.meta && !sbData.deleted){
+                found={id,name:sbData.meta.name,emoji:sbData.meta.emoji||'📒',ownerId,members:sbData.meta.members||[],shared:true};
+              }
+            }
+          }catch(e3){}
         }
       }
     }catch(e){console.log('Firebase index search error:',e);}
@@ -775,6 +791,20 @@ async function joinBook(){
         }
       }
     }catch(e){console.log('Firebase full scan error:',e);}
+  }
+
+  // Fallback: try sharedBooks path directly by ID
+  if(!found && window.db){
+    try{
+      const sbSnap=await window.dbGet(window.dbRef(window.db,'sharedBooks/'+id));
+      if(sbSnap.exists()){
+        const sbData=sbSnap.val();
+        if(sbData.meta && !sbData.deleted){
+          foundOwnerId=sbData.meta.ownerId||null;
+          found={id,name:sbData.meta.name,emoji:sbData.meta.emoji||'📒',ownerId:foundOwnerId,members:sbData.meta.members||[],shared:true};
+        }
+      }
+    }catch(e){console.log('Firebase sharedBooks direct lookup error:',e);}
   }
   
   // Fallback: scan localStorage cached users
@@ -990,8 +1020,11 @@ async function inviteByEmail(){
   }
   
   // Update sharedBooks metadata with new member list
-  if(isSharedBook(book.id)){
-    saveSharedBookData(book.id);
+  book.shared=true;
+  saveSharedBookData(book.id);
+  // Ensure bookIndex is set so joiner can find book
+  if(window.db){
+    try{await window.dbSet(window.dbRef(window.db,'bookIndex/'+book.id),{ownerId:book.ownerId});}catch(e){}
   }
   toast(invitedUser.name+' added ✓');
   openShareSheet();
@@ -2208,6 +2241,10 @@ window.addEventListener('load',()=>{
    try{
      const snap=await window.dbGet(window.dbRef(window.db,'users/'+user.uid));
      if(snap.exists()){ const p=snap.val(); name=p.name||name; }
+     else{
+       // Ensure users node always has a record so inviteByEmail can find this user
+       await window.dbSet(window.dbRef(window.db,'users/'+user.uid),{name,email:user.email});
+     }
      const ds=await window.dbGet(window.dbRef(window.db,'expenseData/'+user.uid));
      if(ds.exists()) Object.assign(S, ds.val());
    }catch(e){}
