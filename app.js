@@ -203,12 +203,14 @@ async function loadSharedBooksThenRender(){
     }
   }catch(e){console.log('Error loading invited books:',e);}
   
-  // Load all shared books this user is a member of
-  const sharedBooks=S.books.filter(b=>isSharedBook(b.id));
-  for(const b of sharedBooks){
+  // FIX: Check ALL books against sharedBooks/ in Firebase — not just ones already
+  // flagged shared locally. Invited users get the book with shared===undefined,
+  // so isSharedBook() returns false and they never loaded remote data before this fix.
+  for(const b of S.books){
     try{
       const snap=await window.dbGet(window.dbRef(window.db,'sharedBooks/'+b.id));
       if(snap.exists()){
+        b.shared=true; // promote — ensures isSharedBook() returns true from now on
         const data=snap.val();
         if(data.transactions){
           S.transactions=S.transactions.filter(t=>t.bookId!==b.id);
@@ -331,9 +333,23 @@ let _listenedBookId=null;
 
 function attachSharedBookListener(bookId){
   if(!window.db || !window.dbOnValue) return;
-  // Detach previous listener
   detachSharedBookListener();
-  if(!isSharedBook(bookId)) return;
+  // FIX: Don't bail early just because isSharedBook() is false locally.
+  // Invited users have shared===undefined until we probe Firebase.
+  if(!isSharedBook(bookId)){
+    window.dbGet(window.dbRef(window.db,'sharedBooks/'+bookId)).then(snap=>{
+      if(snap.exists()){
+        const b=S.books.find(bk=>bk.id===bookId);
+        if(b) b.shared=true;
+        _doAttachListener(bookId);
+      }
+    }).catch(()=>{});
+    return;
+  }
+  _doAttachListener(bookId);
+}
+
+function _doAttachListener(bookId){
   _listenedBookId=bookId;
   const path=window.dbRef(window.db,'sharedBooks/'+bookId);
   _sharedBookListener=window.dbOnValue(path, snap=>{
@@ -844,8 +860,24 @@ async function joinBook(){
   document.getElementById('headerBookName').textContent=found.name;
   document.getElementById('headerBookIcon').textContent=found.emoji;
   saveUserData();
-  // Sync shared book data immediately and attach listener
-  await saveSharedBookData(found.id);
+  
+  // FIX: Load existing transactions from sharedBooks/ BEFORE attaching listener.
+  // Don't call saveSharedBookData here — that would overwrite owner's transactions with
+  // an empty array (this user just joined, has no local txns for this book yet).
+  if(window.db){
+    try{
+      const sharedSnap=await window.dbGet(window.dbRef(window.db,'sharedBooks/'+found.id));
+      if(sharedSnap.exists()){
+        const data=sharedSnap.val();
+        if(data.transactions){
+          S.transactions=S.transactions.filter(t=>t.bookId!==found.id);
+          const remoteTxns=Array.isArray(data.transactions)?data.transactions:Object.values(data.transactions);
+          S.transactions.push(...remoteTxns.filter(t=>t&&t.id));
+        }
+        if(data.categories) S.categories[found.id]=data.categories;
+      }
+    }catch(e){console.log('joinBook load error:',e);}
+  }
   attachSharedBookListener(found.id);
   closeSheetNow();
   renderMonthTabs();showPage('dashboard');
@@ -962,6 +994,10 @@ async function inviteByEmail(){
   
   // Save to current user's Firebase and localStorage
   saveUserData();
+
+  // FIX: Create sharedBooks/{bookId} entry NOW (with shared:true on the book object)
+  // so that when invited user logs in from any device, loadSharedBooksThenRender finds it.
+  await saveSharedBookData(book.id);
   
   // Also add book to invited user's data (localStorage)
   try{
@@ -969,7 +1005,8 @@ async function inviteByEmail(){
     const d=JSON.parse(localStorage.getItem(key)||'{}');
     if(!d.books)d.books=[];
     if(!d.books.find(b=>b.id===book.id)){
-      d.books.push(book);
+      const bookCopy=Object.assign({},book,{shared:true}); // FIX: shared:true on invited user's copy
+      d.books.push(bookCopy);
       if(!d.categories)d.categories={};
       d.categories[book.id]={expense:bookCats(book.id,'expense'),income:bookCats(book.id,'income')};
     }
@@ -983,17 +1020,17 @@ async function inviteByEmail(){
       let d=snap.exists()?snap.val():{books:[],categories:{}};
       if(!d.books)d.books=[];
       if(!d.books.find(b=>b.id===book.id)){
-        d.books.push(book);
+        const bookCopy=Object.assign({},book,{shared:true}); // FIX: shared:true so invited user's isSharedBook() returns true
+        d.books.push(bookCopy);
         if(!d.categories)d.categories={};
         d.categories[book.id]={expense:bookCats(book.id,'expense'),income:bookCats(book.id,'income')};
+      } else {
+        // Book already in their list — ensure shared:true is set
+        const bi=d.books.findIndex(b=>b.id===book.id);
+        if(bi>=0) d.books[bi].shared=true;
       }
       await window.dbSet(window.dbRef(window.db,'expenseData/'+invitedUser.id),d);
     }catch(e){console.log('Firebase invite error:',e);}
-  }
-  
-  // Update sharedBooks metadata with new member list
-  if(isSharedBook(book.id)){
-    saveSharedBookData(book.id);
   }
   toast(invitedUser.name+' added ✓');
   openShareSheet();
@@ -1911,15 +1948,25 @@ function saveTxn(id){
     const m=monthKey(date);
     if(m!==S.currentMonth){S.currentMonth=m;}
   }
-  // For shared books, push immediately to sharedBooks path
+  // FIX: If not locally flagged shared, probe Firebase — another device may have
+  // joined this book. If sharedBooks/{id} exists, promote and save there.
   if(isSharedBook(S.currentBookId)){
     saveSharedBookData(S.currentBookId);
+  } else if(window.db){
+    window.dbGet(window.dbRef(window.db,'sharedBooks/'+S.currentBookId)).then(snap=>{
+      if(snap.exists()){
+        const b=S.books.find(bk=>bk.id===S.currentBookId);
+        if(b) b.shared=true;
+        saveSharedBookData(S.currentBookId);
+      } else {
+        saveUserData();
+      }
+    }).catch(()=>saveUserData());
   } else {
     saveUserData();
   }
   closeSheetNow();
   toast(id?'Entry updated ✓':'Entry saved ✓');
-}
 
 function deleteTxn(id){
 
@@ -1935,6 +1982,16 @@ function deleteTxn(id){
 
   if(isSharedBook(S.currentBookId)){
     saveSharedBookData(S.currentBookId);
+  } else if(window.db){
+    window.dbGet(window.dbRef(window.db,'sharedBooks/'+S.currentBookId)).then(snap=>{
+      if(snap.exists()){
+        const b=S.books.find(bk=>bk.id===S.currentBookId);
+        if(b) b.shared=true;
+        saveSharedBookData(S.currentBookId);
+      } else {
+        saveUserData();
+      }
+    }).catch(()=>saveUserData());
   } else {
     saveUserData();
   }
