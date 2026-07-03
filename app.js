@@ -1319,10 +1319,22 @@ function renderExpenseChart(catMap,totalExpense){
   });
 }
 
+let _txnCatFilter='all';
+function setTxnCatFilter(cat){
+  _txnCatFilter=cat;
+  renderPage();
+}
 function renderTransactions(){
-  const txns=bookTxnsForView(S.currentBookId).sort((a,b)=>b.date.localeCompare(a.date));
+  const allTxns=bookTxnsForView(S.currentBookId).sort((a,b)=>b.date.localeCompare(a.date));
   const cats=bookCats(S.currentBookId);
-  if(!txns.length)return`<div class="empty-state" style="margin-top:40px"><div class="empty-icon">📭</div><div class="empty-text">No entries for ${S.currentMonth==='all'?(_selYear||'this period'):monthLabel(S.currentMonth)}</div></div>`;
+  const presentCats=cats.filter(c=>allTxns.some(t=>t.category===c));
+  if(_txnCatFilter!=='all'&&!presentCats.includes(_txnCatFilter))_txnCatFilter='all';
+  const filterHtml=allTxns.length?`<div style="display:flex;gap:6px;overflow-x:auto;padding:2px 2px 10px;margin:-2px -2px 0">
+    <div class="cat-chip${_txnCatFilter==='all'?' selected':''}" style="flex-shrink:0" onclick="setTxnCatFilter('all')">All</div>
+    ${presentCats.map(c=>`<div class="cat-chip${_txnCatFilter===c?' selected':''}" style="flex-shrink:0" onclick="setTxnCatFilter('${c.replace(/'/g,"\\'")}')">${catEmoji(c)} ${c}</div>`).join('')}
+  </div>`:'';
+  const txns=_txnCatFilter==='all'?allTxns:allTxns.filter(t=>t.category===_txnCatFilter);
+  if(!txns.length)return`${filterHtml}<div class="empty-state" style="margin-top:40px"><div class="empty-icon">📭</div><div class="empty-text">No entries for ${S.currentMonth==='all'?(_selYear||'this period'):monthLabel(S.currentMonth)}</div></div>`;
   const rows=txns.map(t=>{
     const idx=cats.indexOf(t.category);
     const col=CAT_COLORS[idx>=0?idx%CAT_COLORS.length:0];
@@ -1342,7 +1354,7 @@ function renderTransactions(){
       </div>
     </div>`;
   }).join('');
-  return`<div class="section">${rows}</div>`;
+  return`${filterHtml}<div class="section">${rows}</div>`;
 }
 function renderCategoriesPage(){
 
