@@ -1320,11 +1320,31 @@ function renderExpenseChart(catMap,totalExpense){
 }
 
 let _txnCatFilter='all';
+let _txnSubTab='entries'; // 'entries' | 'compare'
 function setTxnCatFilter(cat){
   _txnCatFilter=cat;
   renderPage();
 }
+function setTxnSubTab(tab){
+  _txnSubTab=tab;
+  renderPage();
+}
+function prevMonthKey(m){
+  let[y,mo]=m.split('-').map(Number);
+  mo--;if(mo===0){mo=12;y--;}
+  return y+'-'+String(mo).padStart(2,'0');
+}
+function compareMonthKey(){
+  if(S.currentMonth!=='all')return S.currentMonth;
+  const months=getBookMonths(S.currentBookId,_selYear||today().slice(0,4));
+  return months[0]||today().slice(0,7);
+}
 function renderTransactions(){
+  const tabsHtml=`<div class="auth-tabs" style="margin-bottom:12px">
+    <div class="auth-tab${_txnSubTab==='entries'?' active':''}" onclick="setTxnSubTab('entries')">Entries</div>
+    <div class="auth-tab${_txnSubTab==='compare'?' active':''}" onclick="setTxnSubTab('compare')">Compare</div>
+  </div>`;
+  if(_txnSubTab==='compare')return tabsHtml+renderCompareTab();
   const allTxns=bookTxnsForView(S.currentBookId).sort((a,b)=>b.date.localeCompare(a.date));
   const cats=bookCats(S.currentBookId);
   const presentCats=cats.filter(c=>allTxns.some(t=>t.category===c));
@@ -1334,7 +1354,18 @@ function renderTransactions(){
     ${presentCats.map(c=>`<div class="cat-chip${_txnCatFilter===c?' selected':''}" style="flex-shrink:0" onclick="setTxnCatFilter('${c.replace(/'/g,"\\'")}')">${catEmoji(c)} ${c}</div>`).join('')}
   </div>`:'';
   const txns=_txnCatFilter==='all'?allTxns:allTxns.filter(t=>t.category===_txnCatFilter);
-  if(!txns.length)return`${filterHtml}<div class="empty-state" style="margin-top:40px"><div class="empty-icon">📭</div><div class="empty-text">No entries for ${S.currentMonth==='all'?(_selYear||'this period'):monthLabel(S.currentMonth)}</div></div>`;
+  if(!txns.length)return`${tabsHtml}${filterHtml}<div class="empty-state" style="margin-top:40px"><div class="empty-icon">📭</div><div class="empty-text">No entries for ${S.currentMonth==='all'?(_selYear||'this period'):monthLabel(S.currentMonth)}</div></div>`;
+  const totalIncome=txns.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0);
+  const totalExpense=txns.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0);
+  const netAmt=totalIncome-totalExpense;
+  const totalLabel=_txnCatFilter==='all'?'Total':_txnCatFilter;
+  const summaryParts=[];
+  if(totalExpense>0)summaryParts.push(`<span style="color:var(--red,#e5484d)">-${fmt(totalExpense)}</span>`);
+  if(totalIncome>0)summaryParts.push(`<span style="color:var(--green,#2f9e44)">+${fmt(totalIncome)}</span>`);
+  const summaryHtml=`<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;background:var(--surface2);border-radius:var(--radius);margin-bottom:10px">
+    <span style="font-size:12px;font-weight:600;color:var(--text2)">${totalLabel} (${txns.length})</span>
+    <span style="font-size:14px;font-weight:700">${summaryParts.join(' &nbsp;/&nbsp; ')||fmt(netAmt)}</span>
+  </div>`;
   const rows=txns.map(t=>{
     const idx=cats.indexOf(t.category);
     const col=CAT_COLORS[idx>=0?idx%CAT_COLORS.length:0];
@@ -1354,7 +1385,50 @@ function renderTransactions(){
       </div>
     </div>`;
   }).join('');
-  return`${filterHtml}<div class="section">${rows}</div>`;
+  return`${tabsHtml}${filterHtml}${summaryHtml}<div class="section">${rows}</div>`;
+}
+function renderCompareTab(){
+  const curM=compareMonthKey();
+  const prevM=prevMonthKey(curM);
+  const curTxns=S.transactions.filter(t=>t.bookId===S.currentBookId&&t.date.startsWith(curM));
+  const prevTxns=S.transactions.filter(t=>t.bookId===S.currentBookId&&t.date.startsWith(prevM));
+  function groupByCat(txns,type){
+    const m={};
+    txns.filter(t=>t.type===type).forEach(t=>{m[t.category]=(m[t.category]||0)+t.amount;});
+    return m;
+  }
+  function buildRows(curMap,prevMap,isExpense){
+    const catList=[...new Set([...Object.keys(curMap),...Object.keys(prevMap)])].sort((a,b)=>(curMap[b]||0)-(curMap[a]||0));
+    if(!catList.length)return`<div class="empty-state" style="padding:20px 0"><div class="empty-text">No data</div></div>`;
+    return catList.map(c=>{
+      const cur=curMap[c]||0,prev=prevMap[c]||0;
+      const diff=cur-prev;
+      const pct=prev>0?Math.round((diff/prev)*100):(cur>0?100:0);
+      const flat=diff===0;
+      const up=diff>0;
+      const bad=flat?null:(isExpense?up:!up);
+      const arrow=flat?'→':(up?'▲':'▼');
+      const color=flat?'var(--text2)':(bad?'#e5484d':'#2f9e44');
+      return`<div class="txn-item" style="cursor:default">
+        <div class="txn-icon" style="background:var(--surface2)">${catEmoji(c)}</div>
+        <div class="txn-body">
+          <div class="txn-cat">${c}</div>
+          <div class="txn-meta">Prev: ${fmt(prev)}</div>
+        </div>
+        <div class="txn-right">
+          <div class="txn-amt">${fmt(cur)}</div>
+          <div class="txn-date" style="color:${color};font-weight:600">${arrow} ${Math.abs(pct)}%</div>
+        </div>
+      </div>`;
+    }).join('');
+  }
+  const curExp=groupByCat(curTxns,'expense'),prevExp=groupByCat(prevTxns,'expense');
+  const curInc=groupByCat(curTxns,'income'),prevInc=groupByCat(prevTxns,'income');
+  return`<div style="text-align:center;margin-bottom:14px;font-size:13px;color:var(--text2);font-weight:500">${monthLabel(curM)} vs ${monthLabel(prevM)}</div>
+  <div style="font-size:12px;font-weight:700;color:var(--text2);margin:4px 4px 6px;letter-spacing:.5px">EXPENSES</div>
+  <div class="section">${buildRows(curExp,prevExp,true)}</div>
+  <div style="font-size:12px;font-weight:700;color:var(--text2);margin:16px 4px 6px;letter-spacing:.5px">INCOME</div>
+  <div class="section">${buildRows(curInc,prevInc,false)}</div>`;
 }
 function renderCategoriesPage(){
 
